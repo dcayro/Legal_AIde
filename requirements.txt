@@ -1,0 +1,6 @@
+Flask
+python-dotenv
+openai
+PyMuPDF==1.26.0
+faiss-cpu
+numpy
