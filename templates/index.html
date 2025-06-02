@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Legal PDF Chatbot</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: auto; }
+        h1 { color: #333; }
+        form { margin-bottom: 20px; }
+        input[type="file"], input[type="text"] { padding: 10px; margin: 10px 0; width: 100%; }
+        input[type="submit"] { padding: 10px 20px; background-color: #007BFF; color: white; border: none; cursor: pointer; }
+        input[type="submit"]:hover { background-color: #0056b3; }
+        .response { background: #f4f4f4; padding: 20px; border-left: 4px solid #007BFF; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Legal PDF Chatbot</h1>
+
+    <form method="POST" enctype="multipart/form-data">
+        <label><strong>Upload Legal PDFs:</strong></label>
+        <input type="file" name="document" multiple accept=".pdf">
+        <input type="submit" value="Upload PDFs">
+    </form>
+
+    <form method="POST">
+        <label><strong>Ask a Question:</strong></label>
+        <input type="text" name="question" placeholder="e.g. What does the Employment Act say about redundancy?">
+        <input type="submit" value="Ask Question">
+    </form>
+
+    {% if answer %}
+    <div class="response">
+        <h3>Answer:</h3>
+        <p>{{ answer }}</p>
+    </div>
+    {% endif %}
+</body>
+</html>
