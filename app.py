@@ -1,14 +1,15 @@
-# pdf_chatbot_flask/app.py
-
 import os
 import fitz  # PyMuPDF
 import openai
 import faiss
 import pickle
 import numpy as np
+
 from flask import Flask, request, render_template
 from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
 
+# Load environment variables from .env
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -16,78 +17,74 @@ app = Flask(__name__)
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# In-memory store of all chunks
-CHUNKS = []
-VEC_INDEX = None
+# Constants
+EMBEDDING_MODEL = "text-embedding-3-small"
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
 
-# PDF Processing
-
-def extract_text_from_pdf(pdf_path):
-    doc = fitz.open(pdf_path)
-    text = "\n".join([page.get_text() for page in doc])
+# Utilities
+def extract_text_from_pdf(file_path):
+    text = ""
+    with fitz.open(file_path) as doc:
+        for page in doc:
+            text += page.get_text()
     return text
 
-def chunk_text(text, chunk_size=500):
-    words = text.split()
-    return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+def split_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
+    chunks = []
+    for i in range(0, len(text), chunk_size - overlap):
+        chunk = text[i:i + chunk_size]
+        chunks.append(chunk)
+    return chunks
 
 def embed_texts(texts):
-    response = openai.Embedding.create(
+    response = openai.embeddings.create(
         input=texts,
-        model="text-embedding-ada-002"
+        model=EMBEDDING_MODEL
     )
-    return [record["embedding"] for record in response["data"]]
+    return [np.array(d.embedding, dtype=np.float32) for d in response.data]
 
 def build_vector_store(chunks):
     embeddings = embed_texts(chunks)
-    dim = len(embeddings[0])
-    index = faiss.IndexFlatL2(dim)
-    index.add(np.array(embeddings).astype("float32"))
-    return index
+    index = faiss.IndexFlatL2(len(embeddings[0]))
+    index.add(np.array(embeddings))
+    return index, chunks
 
-def find_similar_chunks(query, index, chunks, k=5):
-    query_embedding = embed_texts([query])[0]
-    D, I = index.search(np.array([query_embedding]).astype("float32"), k)
-    return [chunks[i] for i in I[0]]
+def query_vector_store(index, chunks, query, k=3):
+    query_vec = embed_texts([query])[0].reshape(1, -1)
+    distances, indices = index.search(query_vec, k)
+    return [chunks[i] for i in indices[0]]
 
-def ask_openai(question, context_chunks):
-    prompt = """Answer the question based only on the following documents:
-
-""" + "\n---\n".join(context_chunks) + f"\n\nQuestion: {question}\nAnswer:"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a helpful legal assistant."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3
+def ask_chatgpt(context, question):
+    prompt = f"Use the following legal context to answer the question.\n\nContext:\n{context}\n\nQuestion: {question}\nAnswer:"
+    response = openai.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0
     )
-    return response["choices"][0]["message"]["content"].strip()
+    return response.choices[0].message.content.strip()
 
+# Routes
 @app.route("/", methods=["GET", "POST"])
 def index():
-    global CHUNKS, VEC_INDEX
-    answer = ""
+    answer = None
     if request.method == "POST":
-        if "document" in request.files:
-            files = request.files.getlist("document")
-            for pdf in files:
-                path = os.path.join(UPLOAD_FOLDER, pdf.filename)
-                pdf.save(path)
-                text = extract_text_from_pdf(path)
-                pdf_chunks = chunk_text(text)
-                CHUNKS.extend(pdf_chunks)
-            VEC_INDEX = build_vector_store(CHUNKS)
+        uploaded_file = request.files["document"]
+        question = request.form.get("question")
 
-        if request.form.get("question"):
-            question = request.form["question"]
-            if VEC_INDEX is None or not CHUNKS:
-                answer = "Please upload PDF documents first."
-            else:
-                relevant_chunks = find_similar_chunks(question, VEC_INDEX, CHUNKS)
-                answer = ask_openai(question, relevant_chunks)
+        if uploaded_file.filename != "" and question:
+            filename = secure_filename(uploaded_file.filename)
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            uploaded_file.save(filepath)
+
+            text = extract_text_from_pdf(filepath)
+            chunks = split_text(text)
+            index, chunk_list = build_vector_store(chunks)
+            context = "\n\n".join(query_vector_store(index, chunk_list, question))
+            answer = ask_chatgpt(context, question)
 
     return render_template("index.html", answer=answer)
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5002)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
